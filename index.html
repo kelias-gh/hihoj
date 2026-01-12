@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shader Paint</title>
+    <link rel="stylesheet" href="/src/styles/main.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="canvas"></canvas>
+      <div id="controls">
+        <label>
+          Color:
+          <input type="color" id="color-picker" value="#ff0000" />
+        </label>
+        <label>
+          Brush Size:
+          <input type="range" id="brush-size" min="1" max="100" value="20" />
+        </label>
+        <button id="clear-btn">Clear</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
