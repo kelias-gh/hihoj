@@ -7,18 +7,21 @@ import {
   distanceFieldFrag,
   finalDisplayFrag
 } from './shaders';
+import { createCountryLabel, CountryLabel } from './countryNaming';
+import { TextRenderer } from './textRenderer';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const colorPicker = document.getElementById('color-picker') as HTMLInputElement;
 const brushSizeSlider = document.getElementById('brush-size') as HTMLInputElement;
 const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
+const nameBtn = document.getElementById('name-btn') as HTMLButtonElement;
 
 let width = window.innerWidth;
 let height = window.innerHeight;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
 renderer.setSize(width, height);
-renderer.setPixelRatio(1);
+renderer.setPixelRatio(window.devicePixelRatio);
 
 // Fixed camera for paint passes (always identity)
 const paintCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -92,6 +95,7 @@ displayScene.add(new THREE.Mesh(quad, displayMat));
 
 let isPainting = false;
 let isPanning = false;
+let isNamingMode = false;
 let prevPos = new THREE.Vector2(-1000, -1000);
 let currPos = new THREE.Vector2(-1000, -1000);
 let panStart = new THREE.Vector2();
@@ -102,6 +106,58 @@ let panX = 0;
 let panY = 0;
 
 const jfaSteps = [32, 16, 8, 4, 2, 1];
+
+// Country naming
+const textRenderer = new TextRenderer(width, height);
+const countryLabels: Map<string, CountryLabel> = new Map();
+
+// Create a unique key from a color
+function colorToKey(color: THREE.Color): string {
+  const r = Math.round(color.r * 255);
+  const g = Math.round(color.g * 255);
+  const b = Math.round(color.b * 255);
+  return `${r}_${g}_${b}`;
+}
+
+// Read pixel color at a given canvas position
+function getPixelColor(canvasX: number, canvasY: number): THREE.Color {
+  const pixelBuffer = new Uint8Array(4);
+  renderer.setRenderTarget(paintA);
+  renderer.readRenderTargetPixels(paintA, Math.floor(canvasX), Math.floor(canvasY), 1, 1, pixelBuffer);
+  renderer.setRenderTarget(null);
+  return new THREE.Color(pixelBuffer[0] / 255, pixelBuffer[1] / 255, pixelBuffer[2] / 255);
+}
+
+// Read all pixels from the paint buffer
+function getAllPixels(): Uint8Array {
+  const pixelBuffer = new Uint8Array(width * height * 4);
+  renderer.setRenderTarget(paintA);
+  renderer.readRenderTargetPixels(paintA, 0, 0, width, height, pixelBuffer);
+  renderer.setRenderTarget(null);
+  return pixelBuffer;
+}
+
+// Name a country at the clicked position
+function nameCountryAt(canvasX: number, canvasY: number): void {
+  const color = getPixelColor(canvasX, canvasY);
+
+  // Don't name white background
+  if (color.r > 0.95 && color.g > 0.95 && color.b > 0.95) {
+    return;
+  }
+
+  const name = prompt('Enter country name:');
+  if (!name || name.trim() === '') return;
+
+  const pixelData = getAllPixels();
+  const label = createCountryLabel(pixelData, width, height, color, name.trim().toUpperCase());
+
+  if (label) {
+    const labelId = colorToKey(color);
+    countryLabels.set(labelId, label);
+    textRenderer.addLabel(label, labelId);
+  }
+}
 
 function updateDisplayCamera() {
   displayCamera.left = -1 / zoom + panX;
@@ -119,6 +175,10 @@ function clear() {
   renderer.clear();
   renderer.setRenderTarget(null);
   needsUpdate = true;
+
+  // Clear country labels
+  textRenderer.clear();
+  countryLabels.clear();
 }
 
 function paint() {
@@ -177,10 +237,24 @@ function screenToCanvas(e: MouseEvent): THREE.Vector2 {
 
 canvas.addEventListener('mousedown', (e) => {
   if (e.button === 0) {
-    isPainting = true;
-    currPos = screenToCanvas(e);
-    prevPos.copy(currPos);
-    paint();
+    if (isNamingMode) {
+      // Left click in naming mode - name country
+      const pos = screenToCanvas(e);
+      nameCountryAt(pos.x, pos.y);
+      isNamingMode = false;
+      nameBtn.textContent = 'Name (Middle-click)';
+      canvas.style.cursor = 'crosshair';
+    } else {
+      isPainting = true;
+      currPos = screenToCanvas(e);
+      prevPos.copy(currPos);
+      paint();
+    }
+  } else if (e.button === 2) {
+    // Middle click - name country
+    e.preventDefault();
+    const pos = screenToCanvas(e);
+    nameCountryAt(pos.x, pos.y);
   } else if (e.button === 2) {
     isPanning = true;
     panStart.set(e.clientX, e.clientY);
@@ -239,6 +313,8 @@ window.addEventListener('resize', () => {
   jfaUniforms.resolution.value.set(width, height);
   displayUniforms.u_resolution.value.set(width, height);
 
+  textRenderer.updateResolution(width, height);
+
   updateDisplayCamera();
   clear();
 });
@@ -253,6 +329,17 @@ brushSizeSlider.addEventListener('input', (e) => {
 
 clearBtn.addEventListener('click', clear);
 
+nameBtn.addEventListener('click', () => {
+  isNamingMode = !isNamingMode;
+  if (isNamingMode) {
+    nameBtn.textContent = 'Click on country...';
+    canvas.style.cursor = 'pointer';
+  } else {
+    nameBtn.textContent = 'Name (Middle-click)';
+    canvas.style.cursor = 'crosshair';
+  }
+});
+
 updateDisplayCamera();
 clear();
 
@@ -265,5 +352,6 @@ function animate() {
   }
 
   renderer.render(displayScene, displayCamera);
+  textRenderer.render(renderer, displayCamera);
 }
 animate();
