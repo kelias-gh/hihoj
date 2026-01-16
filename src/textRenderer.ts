@@ -8,13 +8,45 @@ export interface City {
   size: number; // 1-5 scale for city importance
 }
 
-// Higher resolution atlas for better text quality
+// SDF font atlas settings
 const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ ';
-const CHAR_SIZE = 128; // Larger for better quality
+const CHAR_SIZE = 64; // Size of each character cell
+const SDF_SPREAD = 8; // Distance field spread in pixels
 const ATLAS_COLS = 8;
 const ATLAS_ROWS = Math.ceil(CHARS.length / ATLAS_COLS);
 const ATLAS_WIDTH = ATLAS_COLS * CHAR_SIZE;
 const ATLAS_HEIGHT = ATLAS_ROWS * CHAR_SIZE;
+
+// SDF text shader for smooth rendering at any zoom
+const sdfTextVert = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const sdfTextFrag = `
+#ifdef GL_OES_standard_derivatives
+#extension GL_OES_standard_derivatives : enable
+#endif
+
+uniform sampler2D map;
+uniform vec3 color;
+varying vec2 vUv;
+
+void main() {
+  float dist = texture2D(map, vUv).a;
+
+  // Screen-space anti-aliasing
+  float fw = fwidth(dist);
+  float alpha = smoothstep(0.5 - fw, 0.5 + fw, dist);
+
+  if (alpha < 0.01) discard;
+
+  gl_FragColor = vec4(color, alpha);
+}
+`;
 
 function getCharUVs(char: string): { uMin: number; uMax: number; vMin: number; vMax: number } {
   const upperChar = char.toUpperCase();
@@ -49,40 +81,87 @@ export class TextRenderer {
   }
 
   private createFontAtlas(): THREE.CanvasTexture {
-    const canvas = document.createElement('canvas');
-    canvas.width = ATLAS_WIDTH;
-    canvas.height = ATLAS_HEIGHT;
-    const ctx = canvas.getContext('2d')!;
+    // Step 1: Render high-res glyphs
+    const hiresScale = 4;
+    const hiresCharSize = CHAR_SIZE * hiresScale;
+    const hiresWidth = ATLAS_WIDTH * hiresScale;
+    const hiresHeight = ATLAS_HEIGHT * hiresScale;
 
-    ctx.clearRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
+    const hiresCanvas = document.createElement('canvas');
+    hiresCanvas.width = hiresWidth;
+    hiresCanvas.height = hiresHeight;
+    const hiresCtx = hiresCanvas.getContext('2d')!;
 
-    // Use a clean sans-serif font
-    ctx.fillStyle = 'white';
-    ctx.font = `bold ${CHAR_SIZE * 0.65}px Arial, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    hiresCtx.fillStyle = 'white';
+    hiresCtx.font = `bold ${hiresCharSize * 0.65}px Arial, sans-serif`;
+    hiresCtx.textAlign = 'center';
+    hiresCtx.textBaseline = 'middle';
 
     for (let i = 0; i < CHARS.length; i++) {
       const col = i % ATLAS_COLS;
       const row = Math.floor(i / ATLAS_COLS);
-      const x = col * CHAR_SIZE + CHAR_SIZE / 2;
-      const y = row * CHAR_SIZE + CHAR_SIZE / 2;
-      ctx.fillText(CHARS[i], x, y);
+      const x = col * hiresCharSize + hiresCharSize / 2;
+      const y = row * hiresCharSize + hiresCharSize / 2;
+      hiresCtx.fillText(CHARS[i], x, y);
     }
 
-    // Convert to alpha
-    const imageData = ctx.getImageData(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const alpha = data[i];
-      data[i] = 0;
-      data[i + 1] = 0;
-      data[i + 2] = 0;
-      data[i + 3] = alpha;
+    // Get high-res binary image
+    const hiresData = hiresCtx.getImageData(0, 0, hiresWidth, hiresHeight);
+    const hiresBinary = new Uint8Array(hiresWidth * hiresHeight);
+    for (let i = 0; i < hiresBinary.length; i++) {
+      hiresBinary[i] = hiresData.data[i * 4] > 127 ? 1 : 0;
     }
-    ctx.putImageData(imageData, 0, 0);
 
-    const texture = new THREE.CanvasTexture(canvas);
+    // Step 2: Generate SDF at output resolution
+    const sdfCanvas = document.createElement('canvas');
+    sdfCanvas.width = ATLAS_WIDTH;
+    sdfCanvas.height = ATLAS_HEIGHT;
+    const sdfCtx = sdfCanvas.getContext('2d')!;
+    const sdfImageData = sdfCtx.createImageData(ATLAS_WIDTH, ATLAS_HEIGHT);
+
+    const spread = SDF_SPREAD * hiresScale;
+
+    for (let y = 0; y < ATLAS_HEIGHT; y++) {
+      for (let x = 0; x < ATLAS_WIDTH; x++) {
+        // Sample point in high-res space
+        const hx = Math.floor(x * hiresScale + hiresScale / 2);
+        const hy = Math.floor(y * hiresScale + hiresScale / 2);
+        const inside = hiresBinary[hy * hiresWidth + hx] === 1;
+
+        // Find minimum distance to edge
+        let minDist = spread;
+        const searchRadius = spread;
+
+        for (let sy = -searchRadius; sy <= searchRadius; sy++) {
+          for (let sx = -searchRadius; sx <= searchRadius; sx++) {
+            const px = hx + sx;
+            const py = hy + sy;
+            if (px < 0 || px >= hiresWidth || py < 0 || py >= hiresHeight) continue;
+
+            const pixelInside = hiresBinary[py * hiresWidth + px] === 1;
+            if (pixelInside !== inside) {
+              const dist = Math.sqrt(sx * sx + sy * sy);
+              if (dist < minDist) minDist = dist;
+            }
+          }
+        }
+
+        // Normalize: 0.5 = edge, 0 = outside by spread, 1 = inside by spread
+        const normalizedDist = inside
+          ? 0.5 + (minDist / spread) * 0.5
+          : 0.5 - (minDist / spread) * 0.5;
+
+        const idx = (y * ATLAS_WIDTH + x) * 4;
+        sdfImageData.data[idx] = 255;
+        sdfImageData.data[idx + 1] = 255;
+        sdfImageData.data[idx + 2] = 255;
+        sdfImageData.data[idx + 3] = Math.round(normalizedDist * 255);
+      }
+    }
+
+    sdfCtx.putImageData(sdfImageData, 0, 0);
+
+    const texture = new THREE.CanvasTexture(sdfCanvas);
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.generateMipmaps = true;
@@ -90,7 +169,7 @@ export class TextRenderer {
     return texture;
   }
 
-  private createCharMesh(char: string, charWidth: number, charHeight: number): THREE.Mesh {
+  private createCharMesh(char: string, charWidth: number, charHeight: number, color: THREE.Color = new THREE.Color(0, 0, 0)): THREE.Mesh {
     const uvs = getCharUVs(char);
     const geometry = new THREE.PlaneGeometry(charWidth, charHeight);
 
@@ -101,10 +180,15 @@ export class TextRenderer {
     uvAttribute.setXY(3, uvs.uMax, uvs.vMax);
     uvAttribute.needsUpdate = true;
 
-    const material = new THREE.MeshBasicMaterial({
-      map: this.fontAtlas,
+    // SDF shader material for smooth text at any zoom level
+    const material = new THREE.ShaderMaterial({
+      vertexShader: sdfTextVert,
+      fragmentShader: sdfTextFrag,
+      uniforms: {
+        map: { value: this.fontAtlas },
+        color: { value: color },
+      },
       transparent: true,
-      alphaTest: 0.05,
       depthTest: false,
       depthWrite: false,
     });
@@ -185,7 +269,7 @@ export class TextRenderer {
     // City name text
     const name = city.name.toUpperCase();
     const spacing = charWidth * 0.9;
-    const startX = worldX + markerSize / 2 + charWidth * 0.4;
+    const startX = worldX + markerSize / 2 + charWidth * 0.2;
 
     for (let i = 0; i < name.length; i++) {
       const char = name[i];

@@ -75,15 +75,14 @@ const paintMat = new THREE.ShaderMaterial({ vertexShader: quadVert, fragmentShad
 
 const borderUniforms = {
   u_lookUpTex: { value: paintA.texture },
-  resolution: { value: new THREE.Vector2(width, height) },
+  u_pixelSize: { value: new THREE.Vector2(1 / width, 1 / height) },
 };
 
 const borderMat = new THREE.ShaderMaterial({ vertexShader: quadVert, fragmentShader: borderDetectFrag, uniforms: borderUniforms });
 
 const jfaUniforms = {
   u_inputTexture: { value: null as THREE.Texture | null },
-  resolution: { value: new THREE.Vector2(width, height) },
-  step: { value: 1 },
+  u_stepSize: { value: new THREE.Vector2(1 / width, 1 / height) },
 };
 
 const jfaMat = new THREE.ShaderMaterial({ vertexShader: quadVert, fragmentShader: jfaFrag, uniforms: jfaUniforms });
@@ -98,7 +97,8 @@ const distMat = new THREE.ShaderMaterial({ vertexShader: quadVert, fragmentShade
 const displayUniforms = {
   u_colorMap: { value: paintA.texture },
   u_distanceField: { value: distanceFieldRT.texture },
-  u_resolution: { value: new THREE.Vector2(width, height) },
+  u_pixelSize: { value: new THREE.Vector2(1 / width, 1 / height) },
+  u_borderColor: { value: new THREE.Vector3(0, 0, 0) },
 };
 
 const displayMat = new THREE.ShaderMaterial({ vertexShader: quadVert, fragmentShader: finalDisplayFrag, uniforms: displayUniforms });
@@ -373,7 +373,7 @@ function runJFA() {
   paintMesh.material = jfaMat;
   for (const s of jfaSteps) {
     jfaUniforms.u_inputTexture.value = jfaA.texture;
-    jfaUniforms.step.value = s;
+    jfaUniforms.u_stepSize.value.set(s / width, s / height);
     renderer.setRenderTarget(jfaB);
     renderer.render(paintScene, paintCamera);
     [jfaA, jfaB] = [jfaB, jfaA];

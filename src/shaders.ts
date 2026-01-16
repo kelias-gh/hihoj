@@ -34,54 +34,69 @@ void main() {
 export const borderDetectFrag = `
 varying vec2 vUv;
 uniform sampler2D u_lookUpTex;
-uniform vec2 resolution;
+uniform vec2 u_pixelSize;  // precomputed 1.0/resolution on CPU
 
 void main() {
-  vec4 centerColor = texture2D(u_lookUpTex, vUv);
+  vec3 centerColor = texture2D(u_lookUpTex, vUv).rgb;
 
-  vec2 pixelSize = 1.0 / resolution;
+  // Sample 4 neighbors - offset coordinates computed once
+  vec3 leftColor = texture2D(u_lookUpTex, vUv + vec2(-u_pixelSize.x, 0.0)).rgb;
+  vec3 rightColor = texture2D(u_lookUpTex, vUv + vec2(u_pixelSize.x, 0.0)).rgb;
+  vec3 upColor = texture2D(u_lookUpTex, vUv + vec2(0.0, u_pixelSize.y)).rgb;
+  vec3 downColor = texture2D(u_lookUpTex, vUv + vec2(0.0, -u_pixelSize.y)).rgb;
 
-  vec4 leftColor = texture2D(u_lookUpTex, vUv + vec2(-pixelSize.x, 0.0));
-  vec4 rightColor = texture2D(u_lookUpTex, vUv + vec2(pixelSize.x, 0.0));
-  vec4 upColor = texture2D(u_lookUpTex, vUv + vec2(0.0, pixelSize.y));
-  vec4 downColor = texture2D(u_lookUpTex, vUv + vec2(0.0, -pixelSize.y));
+  // Use dot product for fast color comparison (avoids branch-heavy any/notEqual)
+  vec3 diffL = leftColor - centerColor;
+  vec3 diffR = rightColor - centerColor;
+  vec3 diffU = upColor - centerColor;
+  vec3 diffD = downColor - centerColor;
 
-  bool isBorder = any(notEqual(leftColor.rgb, centerColor.rgb)) ||
-                 any(notEqual(rightColor.rgb, centerColor.rgb)) ||
-                 any(notEqual(upColor.rgb, centerColor.rgb)) ||
-                 any(notEqual(downColor.rgb, centerColor.rgb));
+  float borderTest = dot(diffL, diffL) + dot(diffR, diffR) + dot(diffU, diffU) + dot(diffD, diffD);
 
-  gl_FragColor = isBorder ? vec4(vUv, 0.0, 1.0) : vec4(-1.0, -1.0, 0.0, 1.0);
+  gl_FragColor = borderTest > 0.0001 ? vec4(vUv, 0.0, 1.0) : vec4(-1.0, -1.0, 0.0, 1.0);
 }
 `;
 
 export const jfaFrag = `
 varying vec2 vUv;
 uniform sampler2D u_inputTexture;
-uniform vec2 resolution;
-uniform float step;
+uniform vec2 u_stepSize;  // precomputed vec2(step/resolution.x, step/resolution.y) on CPU
 
 void main() {
   vec2 currentSeedPos = texture2D(u_inputTexture, vUv).xy;
-  float min_dist = (currentSeedPos.x < 0.0) ? 99999.0 : distance(vUv, currentSeedPos);
 
-  for (int y = -1; y <= 1; y++) {
-    for (int x = -1; x <= 1; x++) {
-      vec2 offset = vec2(float(x) * (step / resolution.x), float(y) * (step / resolution.y));
-      vec2 neighborUv = vUv + offset;
+  vec2 toSeed = vUv - currentSeedPos;
+  float minDistSq = (currentSeedPos.x < 0.0) ? 1e10 : dot(toSeed, toSeed);
+  
+  vec2 n0 = texture2D(u_inputTexture, vUv + vec2(-u_stepSize.x, -u_stepSize.y)).xy;
+  vec2 n1 = texture2D(u_inputTexture, vUv + vec2(0.0, -u_stepSize.y)).xy;
+  vec2 n2 = texture2D(u_inputTexture, vUv + vec2(u_stepSize.x, -u_stepSize.y)).xy;
+  vec2 n3 = texture2D(u_inputTexture, vUv + vec2(-u_stepSize.x, 0.0)).xy;
+  vec2 n4 = texture2D(u_inputTexture, vUv + vec2(u_stepSize.x, 0.0)).xy;
+  vec2 n5 = texture2D(u_inputTexture, vUv + vec2(-u_stepSize.x, u_stepSize.y)).xy;
+  vec2 n6 = texture2D(u_inputTexture, vUv + vec2(0.0, u_stepSize.y)).xy;
+  vec2 n7 = texture2D(u_inputTexture, vUv + vec2(u_stepSize.x, u_stepSize.y)).xy;
 
-      vec2 neighborSeedPos = texture2D(u_inputTexture, neighborUv).xy;
-
-      if (neighborSeedPos.x >= 0.0) {
-        float dist_to_neighbor_seed = distance(vUv, neighborSeedPos);
-
-        if (dist_to_neighbor_seed < min_dist) {
-          min_dist = dist_to_neighbor_seed;
-          currentSeedPos = neighborSeedPos;
-        }
-      }
-    }
+  // Check each neighbor with squared distance
+  #define CHECK_NEIGHBOR(n) { \
+    if (n.x >= 0.0) { \
+      vec2 d = vUv - n; \
+      float distSq = dot(d, d); \
+      if (distSq < minDistSq) { minDistSq = distSq; currentSeedPos = n; } \
+    } \
   }
+
+  CHECK_NEIGHBOR(n0)
+  CHECK_NEIGHBOR(n1)
+  CHECK_NEIGHBOR(n2)
+  CHECK_NEIGHBOR(n3)
+  CHECK_NEIGHBOR(n4)
+  CHECK_NEIGHBOR(n5)
+  CHECK_NEIGHBOR(n6)
+  CHECK_NEIGHBOR(n7)
+
+  #undef CHECK_NEIGHBOR
+
   gl_FragColor = vec4(currentSeedPos, 0.0, 1.0);
 }
 `;
@@ -104,32 +119,27 @@ export const finalDisplayFrag = `
 varying vec2 vUv;
 uniform sampler2D u_distanceField;
 uniform sampler2D u_colorMap;
-uniform vec2 u_resolution;
+uniform vec2 u_pixelSize; 
+uniform vec3 u_borderColor;
 
 void main() {
-  vec2 pixelSize = 1.0 / u_resolution;
+  vec2 halfPixel = u_pixelSize * 0.5;
 
-  float distance = texture2D(u_distanceField, vUv).r;
-  distance += texture2D(u_distanceField, vUv + vec2(pixelSize.x, 0.)).r;
-  distance += texture2D(u_distanceField, vUv + vec2(pixelSize.x, pixelSize.y)).r;
-  distance += texture2D(u_distanceField, vUv + vec2(0., pixelSize.y)).r;
-  distance += texture2D(u_distanceField, vUv + vec2(-pixelSize.x, pixelSize.y)).r;
-  distance += texture2D(u_distanceField, vUv + vec2(-pixelSize.x, 0.)).r;
-  distance += texture2D(u_distanceField, vUv + vec2(-pixelSize.x, -pixelSize.y)).r;
-  distance += texture2D(u_distanceField, vUv + vec2(0., -pixelSize.y)).r;
-  distance += texture2D(u_distanceField, vUv + vec2(pixelSize.x, -pixelSize.y)).r;
-  distance /= 20.;
+  float dist = texture2D(u_distanceField, vUv + vec2(-halfPixel.x, -halfPixel.y)).r;
+  dist += texture2D(u_distanceField, vUv + vec2(halfPixel.x, -halfPixel.y)).r;
+  dist += texture2D(u_distanceField, vUv + vec2(-halfPixel.x, halfPixel.y)).r;
+  dist += texture2D(u_distanceField, vUv + vec2(halfPixel.x, halfPixel.y)).r;
+  dist *= 0.1; 
 
   vec4 color = texture2D(u_colorMap, vUv);
-  vec4 innerGlowColor = vec4(0.0, 0.0, 0.0, 1.0);
-  vec4 politicalBorderColor = vec4(0.0, 0.0, 0.0, 1.0);
 
-  vec4 politicalBorder = mix(
-      color,
-      politicalBorderColor,
-      smoothstep(0.05, 0.045, distance)
-  );
+  float borderMask = smoothstep(0.05, 0.045, dist);
 
-  gl_FragColor = politicalBorder;
+  gl_FragColor = vec4(
+    mix(
+      color.rgb, 
+      u_borderColor,
+       borderMask),
+    color.a);
 }
 `;
