@@ -118,14 +118,14 @@ void main() {
   distance += texture2D(u_distanceField, vUv + vec2(-pixelSize.x, -pixelSize.y)).r;
   distance += texture2D(u_distanceField, vUv + vec2(0., -pixelSize.y)).r;
   distance += texture2D(u_distanceField, vUv + vec2(pixelSize.x, -pixelSize.y)).r;
-  distance /= 15.;
+  distance /= 20.;
 
   vec4 color = texture2D(u_colorMap, vUv);
   vec4 innerGlowColor = vec4(0.0, 0.0, 0.0, 1.0);
   vec4 politicalBorderColor = vec4(0.0, 0.0, 0.0, 1.0);
 
   vec4 politicalBorder = mix(
-      mix(color, innerGlowColor, smoothstep(0.4, step(distance, 0.2), distance)),
+      color,
       politicalBorderColor,
       smoothstep(0.05, 0.045, distance)
   );

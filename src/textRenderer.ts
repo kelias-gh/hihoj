@@ -40,10 +40,12 @@ export class TextRenderer {
   private cityData: Map<string, { city: City; minZoom: number }> = new Map();
   private textScene: THREE.Scene;
   private currentZoom = 1;
+  private aspectRatio: number;
 
-  constructor(_width: number, _height: number) {
+  constructor(width: number, height: number) {
     this.fontAtlas = this.createFontAtlas();
     this.textScene = new THREE.Scene();
+    this.aspectRatio = width / height;
   }
 
   private createFontAtlas(): THREE.CanvasTexture {
@@ -115,7 +117,8 @@ export class TextRenderer {
 
     const meshes: THREE.Mesh[] = [];
     const charHeight = 0.05;
-    const charWidth = charHeight * 0.7; // Narrower width for proper aspect ratio
+    // Correct for screen aspect ratio: divide width by aspect ratio to prevent horizontal stretch
+    const charWidth = (charHeight * 0.7) / this.aspectRatio;
 
     for (let i = 0; i < label.name.length; i++) {
       const char = label.name[i];
@@ -158,19 +161,21 @@ export class TextRenderer {
     // Much smaller sizes
     const markerSize = 0.008 + city.size * 0.004;
     const charHeight = 0.012 + city.size * 0.003;
-    const charWidth = charHeight * 0.7;
+    // Correct for screen aspect ratio: divide width by aspect ratio to prevent horizontal stretch
+    const charWidth = (charHeight * 0.7) / this.aspectRatio;
 
     const worldX = city.position.x * 2 - 1;
     const worldY = -(city.position.y * 2 - 1);
 
     // City marker (small square)
-    const markerGeometry = new THREE.PlaneGeometry(markerSize, markerSize);
+    const markerGeometry = new THREE.CircleGeometry(0.004, 10);
     const markerMaterial = new THREE.MeshBasicMaterial({
       color: 0x111111,
       depthTest: false,
       depthWrite: false,
     });
     const markerMesh = new THREE.Mesh(markerGeometry, markerMaterial);
+    markerMesh.scale.x = 1 / this.aspectRatio;
     markerMesh.position.set(worldX, worldY, 0);
     markerMesh.userData = { cityId, type: 'cityMarker', size: city.size };
     objects.push(markerMesh);
@@ -216,6 +221,10 @@ export class TextRenderer {
     }
     this.cityMarkers.delete(cityId);
     this.cityData.delete(cityId);
+  }
+
+  updateAspectRatio(width: number, height: number): void {
+    this.aspectRatio = width / height;
   }
 
   updateVisibility(zoom: number): void {

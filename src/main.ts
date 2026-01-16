@@ -500,6 +500,7 @@ window.addEventListener('resize', () => {
   jfaUniforms.resolution.value.set(width, height);
   displayUniforms.u_resolution.value.set(width, height);
 
+  textRenderer.updateAspectRatio(width, height);
   updateDisplayCamera();
   clear();
 });
