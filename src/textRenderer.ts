@@ -1,8 +1,16 @@
 import * as THREE from 'three';
 import { CountryLabel } from './countryNaming';
 
+// City data structure
+export interface City {
+  position: THREE.Vector2; // UV position [0,1]
+  name: string;
+  size: number; // 1-5 scale for city importance
+}
+
+// Higher resolution atlas for better text quality
 const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ ';
-const CHAR_SIZE = 64;
+const CHAR_SIZE = 128; // Larger for better quality
 const ATLAS_COLS = 8;
 const ATLAS_ROWS = Math.ceil(CHARS.length / ATLAS_COLS);
 const ATLAS_WIDTH = ATLAS_COLS * CHAR_SIZE;
@@ -16,18 +24,22 @@ function getCharUVs(char: string): { uMin: number; uMax: number; vMin: number; v
   const col = index % ATLAS_COLS;
   const row = Math.floor(index / ATLAS_COLS);
 
-  const uMin = col / ATLAS_COLS;
   const uMax = (col + 1) / ATLAS_COLS;
-  const vMin = 1 - (row + 1) / ATLAS_ROWS; // Flip Y for texture coords
-  const vMax = 1 - row / ATLAS_ROWS;
+  const uMin = col / ATLAS_COLS;
+  const vMax = 1 - (row + 1) / ATLAS_ROWS;
+  const vMin = 1 - row / ATLAS_ROWS;
 
   return { uMin, uMax, vMin, vMax };
 }
 
 export class TextRenderer {
   private fontAtlas: THREE.CanvasTexture;
-  private charMeshes: Map<string, THREE.Mesh[]> = new Map();
+  private countryLabelMeshes: Map<string, THREE.Mesh[]> = new Map();
+  private cityMeshes: Map<string, THREE.Object3D[]> = new Map();
+  private cityMarkers: Map<string, THREE.Mesh> = new Map();
+  private cityData: Map<string, { city: City; minZoom: number }> = new Map();
   private textScene: THREE.Scene;
+  private currentZoom = 1;
 
   constructor(_width: number, _height: number) {
     this.fontAtlas = this.createFontAtlas();
@@ -40,16 +52,14 @@ export class TextRenderer {
     canvas.height = ATLAS_HEIGHT;
     const ctx = canvas.getContext('2d')!;
 
-    // Clear with transparent background
     ctx.clearRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
 
-    // Draw white text first (we'll use the luminance as alpha)
+    // Use a clean sans-serif font
     ctx.fillStyle = 'white';
-    ctx.font = `bold ${CHAR_SIZE * 0.7}px Arial, sans-serif`;
+    ctx.font = `bold ${CHAR_SIZE * 0.65}px Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // Draw each character
     for (let i = 0; i < CHARS.length; i++) {
       const col = i % ATLAS_COLS;
       const row = Math.floor(i / ATLAS_COLS);
@@ -58,85 +68,186 @@ export class TextRenderer {
       ctx.fillText(CHARS[i], x, y);
     }
 
-    // Process the image data to create proper alpha from the white text
+    // Convert to alpha
     const imageData = ctx.getImageData(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
     const data = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
-      // Use the red channel (white text) as alpha, make the color black
-      const alpha = data[i]; // Red channel
-      data[i] = 0;     // R - black
-      data[i + 1] = 0; // G - black
-      data[i + 2] = 0; // B - black
-      data[i + 3] = alpha; // A - from original white value
+      const alpha = data[i];
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+      data[i + 3] = alpha;
     }
     ctx.putImageData(imageData, 0, 0);
 
     const texture = new THREE.CanvasTexture(canvas);
-    texture.minFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
     texture.needsUpdate = true;
     return texture;
+  }
+
+  private createCharMesh(char: string, charWidth: number, charHeight: number): THREE.Mesh {
+    const uvs = getCharUVs(char);
+    const geometry = new THREE.PlaneGeometry(charWidth, charHeight);
+
+    const uvAttribute = geometry.attributes.uv;
+    uvAttribute.setXY(0, uvs.uMin, uvs.vMin);
+    uvAttribute.setXY(1, uvs.uMax, uvs.vMin);
+    uvAttribute.setXY(2, uvs.uMin, uvs.vMax);
+    uvAttribute.setXY(3, uvs.uMax, uvs.vMax);
+    uvAttribute.needsUpdate = true;
+
+    const material = new THREE.MeshBasicMaterial({
+      map: this.fontAtlas,
+      transparent: true,
+      alphaTest: 0.05,
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    return new THREE.Mesh(geometry, material);
   }
 
   addLabel(label: CountryLabel, labelId: string): void {
     this.removeLabel(labelId);
 
     const meshes: THREE.Mesh[] = [];
-    const charScale = 0.04; // Size of each character in world units
+    const charHeight = 0.05;
+    const charWidth = charHeight * 0.7; // Narrower width for proper aspect ratio
 
     for (let i = 0; i < label.name.length; i++) {
       const char = label.name[i];
       const pos = label.positions[i];
       if (!pos) continue;
 
-      // Create geometry with proper UVs for this character
-      const uvs = getCharUVs(char);
-      const geometry = new THREE.PlaneGeometry(charScale, charScale);
+      const mesh = this.createCharMesh(char, charWidth, charHeight);
 
-      // Update UV coordinates to sample the correct character from atlas
-      const uvAttribute = geometry.attributes.uv;
-      // PlaneGeometry UV order: bottom-left, bottom-right, top-left, top-right
-      uvAttribute.setXY(0, uvs.uMin, uvs.vMin); // bottom-left
-      uvAttribute.setXY(1, uvs.uMax, uvs.vMin); // bottom-right
-      uvAttribute.setXY(2, uvs.uMin, uvs.vMax); // top-left
-      uvAttribute.setXY(3, uvs.uMax, uvs.vMax); // top-right
-      uvAttribute.needsUpdate = true;
-
-      const material = new THREE.MeshBasicMaterial({
-        map: this.fontAtlas,
-        transparent: true,
-        alphaTest: 0.1,
-        depthTest: false,
-        depthWrite: false,
-      });
-
-      const mesh = new THREE.Mesh(geometry, material);
-
-      // Convert UV position [0,1] to world coordinates [-1,1]
       const worldX = pos.x * 2 - 1;
-      const worldY = -(pos.y * 2 - 1); // Flip Y
+      const worldY = -(pos.y * 2 - 1);
 
       mesh.position.set(worldX, worldY, 0);
-      mesh.scale.y = -1.5;
       mesh.rotation.z = label.angle;
+      mesh.userData = { type: 'countryLabel' };
 
       meshes.push(mesh);
       this.textScene.add(mesh);
     }
 
-    this.charMeshes.set(labelId, meshes);
+    this.countryLabelMeshes.set(labelId, meshes);
   }
 
   removeLabel(labelId: string): void {
-    const meshes = this.charMeshes.get(labelId);
+    const meshes = this.countryLabelMeshes.get(labelId);
     if (meshes) {
       for (const mesh of meshes) {
         this.textScene.remove(mesh);
         (mesh.material as THREE.Material).dispose();
         mesh.geometry.dispose();
       }
-      this.charMeshes.delete(labelId);
+      this.countryLabelMeshes.delete(labelId);
     }
+  }
+
+  addCity(city: City, cityId: string): void {
+    this.removeCity(cityId);
+
+    const objects: THREE.Object3D[] = [];
+
+    // Much smaller sizes
+    const markerSize = 0.008 + city.size * 0.004;
+    const charHeight = 0.012 + city.size * 0.003;
+    const charWidth = charHeight * 0.7;
+
+    const worldX = city.position.x * 2 - 1;
+    const worldY = -(city.position.y * 2 - 1);
+
+    // City marker (small square)
+    const markerGeometry = new THREE.PlaneGeometry(markerSize, markerSize);
+    const markerMaterial = new THREE.MeshBasicMaterial({
+      color: 0x111111,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const markerMesh = new THREE.Mesh(markerGeometry, markerMaterial);
+    markerMesh.position.set(worldX, worldY, 0);
+    markerMesh.userData = { cityId, type: 'cityMarker', size: city.size };
+    objects.push(markerMesh);
+    this.textScene.add(markerMesh);
+    this.cityMarkers.set(cityId, markerMesh);
+
+    // City name text
+    const name = city.name.toUpperCase();
+    const spacing = charWidth * 0.9;
+    const startX = worldX + markerSize / 2 + charWidth * 0.4;
+
+    for (let i = 0; i < name.length; i++) {
+      const char = name[i];
+      const mesh = this.createCharMesh(char, charWidth, charHeight);
+      mesh.position.set(startX + i * spacing, worldY, 0);
+      mesh.userData = { type: 'cityText', size: city.size };
+      objects.push(mesh);
+      this.textScene.add(mesh);
+    }
+
+    this.cityMeshes.set(cityId, objects);
+
+    // Store city data with minimum zoom level required to see it
+    // Smaller cities need more zoom to be visible
+    const minZoom = 1 + (5 - city.size) * 0.8;
+    this.cityData.set(cityId, { city, minZoom });
+
+    // Apply current zoom visibility
+    this.updateVisibility(this.currentZoom);
+  }
+
+  removeCity(cityId: string): void {
+    const objects = this.cityMeshes.get(cityId);
+    if (objects) {
+      for (const obj of objects) {
+        this.textScene.remove(obj);
+        if (obj instanceof THREE.Mesh) {
+          (obj.material as THREE.Material).dispose();
+          obj.geometry.dispose();
+        }
+      }
+      this.cityMeshes.delete(cityId);
+    }
+    this.cityMarkers.delete(cityId);
+    this.cityData.delete(cityId);
+  }
+
+  updateVisibility(zoom: number): void {
+    this.currentZoom = zoom;
+
+    // Country labels: visible when zoomed out (zoom < 2)
+    const showCountryLabels = zoom < 2;
+    for (const meshes of this.countryLabelMeshes.values()) {
+      for (const mesh of meshes) {
+        mesh.visible = showCountryLabels;
+      }
+    }
+
+    // Cities: visible based on size and zoom level
+    for (const [cityId, data] of this.cityData.entries()) {
+      const objects = this.cityMeshes.get(cityId);
+      if (objects) {
+        const visible = zoom >= data.minZoom;
+        for (const obj of objects) {
+          obj.visible = visible;
+        }
+      }
+    }
+  }
+
+  getCityMarkers(): THREE.Mesh[] {
+    // Only return visible markers
+    return Array.from(this.cityMarkers.values()).filter(m => m.visible);
+  }
+
+  getScene(): THREE.Scene {
+    return this.textScene;
   }
 
   render(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
@@ -146,8 +257,11 @@ export class TextRenderer {
   }
 
   clear(): void {
-    for (const labelId of Array.from(this.charMeshes.keys())) {
+    for (const labelId of Array.from(this.countryLabelMeshes.keys())) {
       this.removeLabel(labelId);
+    }
+    for (const cityId of Array.from(this.cityMeshes.keys())) {
+      this.removeCity(cityId);
     }
   }
 }

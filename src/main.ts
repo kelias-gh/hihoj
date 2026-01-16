@@ -8,13 +8,30 @@ import {
   finalDisplayFrag
 } from './shaders';
 import { createCountryLabel, CountryLabel } from './countryNaming';
-import { TextRenderer } from './textRenderer';
+import { TextRenderer, City } from './textRenderer';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const colorPicker = document.getElementById('color-picker') as HTMLInputElement;
 const brushSizeSlider = document.getElementById('brush-size') as HTMLInputElement;
 const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
 const nameBtn = document.getElementById('name-btn') as HTMLButtonElement;
+const cityBtn = document.getElementById('city-btn') as HTMLButtonElement;
+
+// Dialog elements
+const cityDialog = document.getElementById('city-dialog') as HTMLDivElement;
+const cityDialogTitle = document.getElementById('city-dialog-title') as HTMLHeadingElement;
+const cityNameInput = document.getElementById('city-name') as HTMLInputElement;
+const citySizeSelect = document.getElementById('city-size') as HTMLSelectElement;
+const cityDeleteBtn = document.getElementById('city-delete') as HTMLButtonElement;
+const cityCancelBtn = document.getElementById('city-cancel') as HTMLButtonElement;
+const citySaveBtn = document.getElementById('city-save') as HTMLButtonElement;
+
+const countryDialog = document.getElementById('country-dialog') as HTMLDivElement;
+const countryDialogTitle = document.getElementById('country-dialog-title') as HTMLHeadingElement;
+const countryNameInput = document.getElementById('country-name') as HTMLInputElement;
+const countryDeleteBtn = document.getElementById('country-delete') as HTMLButtonElement;
+const countryCancelBtn = document.getElementById('country-cancel') as HTMLButtonElement;
+const countrySaveBtn = document.getElementById('country-save') as HTMLButtonElement;
 
 let width = window.innerWidth;
 let height = window.innerHeight;
@@ -96,6 +113,7 @@ displayScene.add(new THREE.Mesh(quad, displayMat));
 let isPainting = false;
 let isPanning = false;
 let isNamingMode = false;
+let isCityMode = false;
 let prevPos = new THREE.Vector2(-1000, -1000);
 let currPos = new THREE.Vector2(-1000, -1000);
 let panStart = new THREE.Vector2();
@@ -107,9 +125,15 @@ let panY = 0;
 
 const jfaSteps = [32, 16, 8, 4, 2, 1];
 
-// Country naming
 const textRenderer = new TextRenderer(width, height);
 const countryLabels: Map<string, CountryLabel> = new Map();
+const cities: Map<string, City> = new Map();
+let cityIdCounter = 0;
+
+let pendingCityPosition: THREE.Vector2 | null = null;
+let editingCityId: string | null = null;
+let pendingCountryColor: THREE.Color | null = null;
+let editingCountryId: string | null = null;
 
 // Create a unique key from a color
 function colorToKey(color: THREE.Color): string {
@@ -119,7 +143,6 @@ function colorToKey(color: THREE.Color): string {
   return `${r}_${g}_${b}`;
 }
 
-// Read pixel color at a given canvas position
 function getPixelColor(canvasX: number, canvasY: number): THREE.Color {
   const pixelBuffer = new Uint8Array(4);
   renderer.setRenderTarget(paintA);
@@ -128,13 +151,42 @@ function getPixelColor(canvasX: number, canvasY: number): THREE.Color {
   return new THREE.Color(pixelBuffer[0] / 255, pixelBuffer[1] / 255, pixelBuffer[2] / 255);
 }
 
-// Read all pixels from the paint buffer
 function getAllPixels(): Uint8Array {
   const pixelBuffer = new Uint8Array(width * height * 4);
   renderer.setRenderTarget(paintA);
   renderer.readRenderTargetPixels(paintA, 0, 0, width, height, pixelBuffer);
   renderer.setRenderTarget(null);
   return pixelBuffer;
+}
+
+// Dialog helpers
+function showCityDialog(isEdit: boolean, existingCity?: City): void {
+  cityDialogTitle.textContent = isEdit ? 'Edit City' : 'Add City';
+  cityDeleteBtn.style.display = isEdit ? 'inline-block' : 'none';
+  cityNameInput.value = existingCity?.name || '';
+  citySizeSelect.value = String(existingCity?.size || 3);
+  cityDialog.classList.remove('hidden');
+  cityNameInput.focus();
+}
+
+function hideCityDialog(): void {
+  cityDialog.classList.add('hidden');
+  pendingCityPosition = null;
+  editingCityId = null;
+}
+
+function showCountryDialog(isEdit: boolean, existingName?: string): void {
+  countryDialogTitle.textContent = isEdit ? 'Edit Country' : 'Name Country';
+  countryDeleteBtn.style.display = isEdit ? 'inline-block' : 'none';
+  countryNameInput.value = existingName || '';
+  countryDialog.classList.remove('hidden');
+  countryNameInput.focus();
+}
+
+function hideCountryDialog(): void {
+  countryDialog.classList.add('hidden');
+  pendingCountryColor = null;
+  editingCountryId = null;
 }
 
 // Name a country at the clicked position
@@ -146,17 +198,132 @@ function nameCountryAt(canvasX: number, canvasY: number): void {
     return;
   }
 
-  const name = prompt('Enter country name:');
-  if (!name || name.trim() === '') return;
+  const labelId = colorToKey(color);
+  const existingLabel = countryLabels.get(labelId);
+
+  pendingCountryColor = color;
+  if (existingLabel) {
+    editingCountryId = labelId;
+    showCountryDialog(true, existingLabel.name);
+  } else {
+    editingCountryId = null;
+    showCountryDialog(false);
+  }
+}
+
+function saveCountry(): void {
+  const name = countryNameInput.value.trim().toUpperCase();
+  if (!name || !pendingCountryColor) {
+    hideCountryDialog();
+    return;
+  }
 
   const pixelData = getAllPixels();
-  const label = createCountryLabel(pixelData, width, height, color, name.trim().toUpperCase());
+  const label = createCountryLabel(pixelData, width, height, pendingCountryColor, name);
 
   if (label) {
-    const labelId = colorToKey(color);
+    const labelId = colorToKey(pendingCountryColor);
     countryLabels.set(labelId, label);
     textRenderer.addLabel(label, labelId);
   }
+
+  hideCountryDialog();
+}
+
+function deleteCountry(): void {
+  if (editingCountryId) {
+    textRenderer.removeLabel(editingCountryId);
+    countryLabels.delete(editingCountryId);
+  }
+  hideCountryDialog();
+}
+
+function openCityDialogAt(canvasX: number, canvasY: number): void {
+  const uvX = canvasX / width;
+  const uvY = 1 - canvasY / height; // Flip Y
+  pendingCityPosition = new THREE.Vector2(uvX, uvY);
+  editingCityId = null;
+  showCityDialog(false);
+}
+
+function saveCity(): void {
+  const name = cityNameInput.value.trim();
+  if (!name) {
+    hideCityDialog();
+    return;
+  }
+
+  const size = parseInt(citySizeSelect.value, 10);
+
+  if (editingCityId) {
+    // Update existing city
+    const city: City = {
+      position: cities.get(editingCityId)!.position,
+      name,
+      size
+    };
+    cities.set(editingCityId, city);
+    textRenderer.addCity(city, editingCityId);
+  } else if (pendingCityPosition) {
+    // Create new city
+    const city: City = {
+      position: pendingCityPosition,
+      name,
+      size
+    };
+    const cityId = `city_${cityIdCounter++}`;
+    cities.set(cityId, city);
+    textRenderer.addCity(city, cityId);
+  }
+
+  hideCityDialog();
+}
+
+function deleteCity(): void {
+  if (editingCityId) {
+    textRenderer.removeCity(editingCityId);
+    cities.delete(editingCityId);
+  }
+  hideCityDialog();
+}
+
+// Check if click hits a city marker
+function screenToWorld(e: MouseEvent): THREE.Vector2 {
+  const rect = canvas.getBoundingClientRect();
+  const sx = (e.clientX - rect.left) / width;
+  const sy = (e.clientY - rect.top) / height;
+
+  // Convert to NDC [-1, 1]
+  const ndcX = (sx - 0.5) * 2;
+  const ndcY = -(sy - 0.5) * 2;
+
+  // Apply camera transform (inverse of what displayCamera does)
+  const worldX = ndcX / zoom + panX;
+  const worldY = ndcY / zoom - panY;
+
+  return new THREE.Vector2(worldX, worldY);
+}
+
+function checkCityClick(e: MouseEvent): string | null {
+  const worldPos = screenToWorld(e);
+  const markers = textRenderer.getCityMarkers();
+
+  // Check each marker
+  for (const marker of markers) {
+    const dx = marker.position.x - worldPos.x;
+    const dy = marker.position.y - worldPos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // Get marker size from geometry
+    const geometry = marker.geometry as THREE.PlaneGeometry;
+    const size = geometry.parameters.width;
+
+    if (dist < size) {
+      return marker.userData.cityId;
+    }
+  }
+
+  return null;
 }
 
 function updateDisplayCamera() {
@@ -165,6 +332,7 @@ function updateDisplayCamera() {
   displayCamera.top = 1 / zoom - panY;
   displayCamera.bottom = -1 / zoom - panY;
   displayCamera.updateProjectionMatrix();
+  textRenderer.updateVisibility(zoom);
 }
 
 function clear() {
@@ -237,6 +405,18 @@ function screenToCanvas(e: MouseEvent): THREE.Vector2 {
 
 canvas.addEventListener('mousedown', (e) => {
   if (e.button === 0) {
+    // First check if we clicked on a city marker
+    const clickedCityId = checkCityClick(e);
+    if (clickedCityId) {
+      const city = cities.get(clickedCityId);
+      if (city) {
+        editingCityId = clickedCityId;
+        pendingCityPosition = null;
+        showCityDialog(true, city);
+      }
+      return;
+    }
+
     if (isNamingMode) {
       // Left click in naming mode - name country
       const pos = screenToCanvas(e);
@@ -244,13 +424,20 @@ canvas.addEventListener('mousedown', (e) => {
       isNamingMode = false;
       nameBtn.textContent = 'Name (Middle-click)';
       canvas.style.cursor = 'crosshair';
+    } else if (isCityMode) {
+      // Left click in city mode - add city
+      const pos = screenToCanvas(e);
+      openCityDialogAt(pos.x, pos.y);
+      isCityMode = false;
+      cityBtn.textContent = 'Add City';
+      canvas.style.cursor = 'crosshair';
     } else {
       isPainting = true;
       currPos = screenToCanvas(e);
       prevPos.copy(currPos);
       paint();
     }
-  } else if (e.button === 2) {
+  } else if (e.button === 1) {
     // Middle click - name country
     e.preventDefault();
     const pos = screenToCanvas(e);
@@ -313,8 +500,6 @@ window.addEventListener('resize', () => {
   jfaUniforms.resolution.value.set(width, height);
   displayUniforms.u_resolution.value.set(width, height);
 
-  textRenderer.updateResolution(width, height);
-
   updateDisplayCamera();
   clear();
 });
@@ -331,6 +516,8 @@ clearBtn.addEventListener('click', clear);
 
 nameBtn.addEventListener('click', () => {
   isNamingMode = !isNamingMode;
+  isCityMode = false;
+  cityBtn.textContent = 'Add City';
   if (isNamingMode) {
     nameBtn.textContent = 'Click on country...';
     canvas.style.cursor = 'pointer';
@@ -338,6 +525,37 @@ nameBtn.addEventListener('click', () => {
     nameBtn.textContent = 'Name (Middle-click)';
     canvas.style.cursor = 'crosshair';
   }
+});
+
+cityBtn.addEventListener('click', () => {
+  isCityMode = !isCityMode;
+  isNamingMode = false;
+  nameBtn.textContent = 'Name (Middle-click)';
+  if (isCityMode) {
+    cityBtn.textContent = 'Click to place...';
+    canvas.style.cursor = 'pointer';
+  } else {
+    cityBtn.textContent = 'Add City';
+    canvas.style.cursor = 'crosshair';
+  }
+});
+
+// City dialog event listeners
+citySaveBtn.addEventListener('click', saveCity);
+cityCancelBtn.addEventListener('click', hideCityDialog);
+cityDeleteBtn.addEventListener('click', deleteCity);
+cityNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') saveCity();
+  if (e.key === 'Escape') hideCityDialog();
+});
+
+// Country dialog event listeners
+countrySaveBtn.addEventListener('click', saveCountry);
+countryCancelBtn.addEventListener('click', hideCountryDialog);
+countryDeleteBtn.addEventListener('click', deleteCountry);
+countryNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') saveCountry();
+  if (e.key === 'Escape') hideCountryDialog();
 });
 
 updateDisplayCamera();

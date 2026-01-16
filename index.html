@@ -20,6 +20,49 @@
         </label>
         <button id="clear-btn">Clear</button>
         <button id="name-btn">Name (Middle-click)</button>
+        <button id="city-btn">Add City</button>
+      </div>
+    </div>
+
+    <!-- City Dialog -->
+    <div id="city-dialog" class="dialog-overlay hidden">
+      <div class="dialog">
+        <h3 id="city-dialog-title">Add City</h3>
+        <div class="dialog-field">
+          <label for="city-name">City Name</label>
+          <input type="text" id="city-name" placeholder="Enter city name..." />
+        </div>
+        <div class="dialog-field">
+          <label for="city-size">City Size</label>
+          <select id="city-size">
+            <option value="1">1 - Village</option>
+            <option value="2">2 - Town</option>
+            <option value="3" selected>3 - City</option>
+            <option value="4">4 - Large City</option>
+            <option value="5">5 - Capital</option>
+          </select>
+        </div>
+        <div class="dialog-buttons">
+          <button id="city-delete" class="btn-danger" style="display: none;">Delete</button>
+          <button id="city-cancel" class="btn-secondary">Cancel</button>
+          <button id="city-save" class="btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Country Dialog -->
+    <div id="country-dialog" class="dialog-overlay hidden">
+      <div class="dialog">
+        <h3 id="country-dialog-title">Name Country</h3>
+        <div class="dialog-field">
+          <label for="country-name">Country Name</label>
+          <input type="text" id="country-name" placeholder="Enter country name..." />
+        </div>
+        <div class="dialog-buttons">
+          <button id="country-delete" class="btn-danger" style="display: none;">Delete</button>
+          <button id="country-cancel" class="btn-secondary">Cancel</button>
+          <button id="country-save" class="btn-primary">Save</button>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
