@@ -9,7 +9,10 @@
   <body>
     <div id="app">
       <canvas id="canvas"></canvas>
+      <div id="fps-counter">FPS: --</div>
       <div id="controls">
+        <button id="play-btn" class="btn-play">Play</button>
+        <div class="separator"></div>
         <label>
           Color:
           <input type="color" id="color-picker" value="#ff0000" />
@@ -18,9 +21,14 @@
           Brush Size:
           <input type="range" id="brush-size" min="1" max="100" value="20" />
         </label>
+        <button id="fill-btn">Fill</button>
         <button id="clear-btn">Clear</button>
         <button id="name-btn">Name (Middle-click)</button>
         <button id="city-btn">Add City</button>
+        <div class="separator"></div>
+        <button id="save-btn">Save</button>
+        <button id="load-btn">Load</button>
+        <input type="file" id="load-input" accept=".map" style="display: none;" />
       </div>
     </div>
 

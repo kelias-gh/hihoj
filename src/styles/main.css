@@ -68,8 +68,22 @@ body {
   background: #666;
 }
 
+#controls .btn-play {
+  background: #228b22;
+}
+
+#controls .btn-play:hover {
+  background: #2ea62e;
+}
+
 #controls button.active {
   background: #0066cc;
+}
+
+#controls .separator {
+  width: 1px;
+  height: 24px;
+  background: #555;
 }
 
 /* Dialog overlay */
@@ -177,4 +191,18 @@ body {
 
 .dialog-buttons .btn-danger:hover {
   background: #dd4444;
+}
+
+/* FPS counter */
+#fps-counter {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #0f0;
+  font-family: monospace;
+  font-size: 14px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  z-index: 100;
 }

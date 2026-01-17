@@ -190,6 +190,42 @@ function traceLineSegment(
   return segments.reduce((best, seg) => (seg.length > best.length ? seg : best));
 }
 
+// Ensure text reads in a natural direction (left-to-right preference)
+// Returns corrected start, end, and angle
+function normalizeTextDirection(
+  start: THREE.Vector2,
+  end: THREE.Vector2
+): { start: THREE.Vector2; end: THREE.Vector2; angle: number } {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+
+  // Calculate the angle
+  let angle = Math.atan2(dy, dx);
+
+  // We want text to be readable, which means:
+  // - Angles between -90° and +90° are fine (text goes left to right)
+  // - Angles outside this range would make text upside down
+  //
+  // If angle is > 90° or < -90°, we flip the direction
+  if (angle > Math.PI / 2) {
+    // Flip: swap start and end
+    return {
+      start: end.clone(),
+      end: start.clone(),
+      angle: angle - Math.PI
+    };
+  } else if (angle < -Math.PI / 2) {
+    // Flip: swap start and end
+    return {
+      start: end.clone(),
+      end: start.clone(),
+      angle: angle + Math.PI
+    };
+  }
+
+  return { start: start.clone(), end: end.clone(), angle };
+}
+
 // Find the best line through the country
 export function findBestLine(
   pixelData: Uint8Array,
@@ -201,30 +237,30 @@ export function findBestLine(
 ): { start: THREE.Vector2; end: THREE.Vector2; angle: number } | null {
   // Create parallel lines with different offsets
   const offsets = [-30, -15, 0, 15, 30];
-  const candidates: { start: THREE.Vector2; end: THREE.Vector2; length: number; angle: number }[] = [];
+  const candidates: { start: THREE.Vector2; end: THREE.Vector2; length: number }[] = [];
 
   for (const offset of offsets) {
     // Parallel lines for y = kx + m
     const parallelYKX: Line = { ...lineYKX, m: lineYKX.m + offset };
     const segYKX = traceLineSegment(pixelData, width, height, targetColor, parallelYKX);
     if (segYKX) {
-      const angle = Math.atan(lineYKX.k);
-      candidates.push({ ...segYKX, angle });
+      candidates.push(segYKX);
     }
 
     // Parallel lines for x = ky + m
     const parallelXKY: Line = { ...lineXKY, m: lineXKY.m + offset };
     const segXKY = traceLineSegment(pixelData, width, height, targetColor, parallelXKY);
     if (segXKY) {
-      const angle = Math.atan(1 / lineXKY.k);
-      candidates.push({ ...segXKY, angle });
+      candidates.push(segXKY);
     }
   }
 
   if (candidates.length === 0) return null;
 
   const best = candidates.reduce((best, c) => (c.length > best.length ? c : best));
-  return { start: best.start, end: best.end, angle: best.angle };
+
+  // Normalize the direction so text reads naturally
+  return normalizeTextDirection(best.start, best.end);
 }
 
 // Generate positions along the line for each character
@@ -246,7 +282,6 @@ export function generateTextPositions(
   // Add padding
   const paddedStart = start.clone().add(dir.clone().multiplyScalar(lineLength * padding));
   const paddedEnd = end.clone().sub(dir.clone().multiplyScalar(lineLength * padding));
-  const paddedLength = paddedStart.distanceTo(paddedEnd);
 
   for (let i = 0; i < charCount; i++) {
     const t = charCount > 1 ? i / (charCount - 1) : 0.5;

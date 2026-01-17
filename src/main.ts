@@ -8,14 +8,33 @@ import {
   finalDisplayFrag
 } from './shaders';
 import { createCountryLabel, CountryLabel } from './countryNaming';
-import { TextRenderer, City } from './textRenderer';
+import {
+  createTextState,
+  addLabel,
+  removeLabel,
+  addCity,
+  removeCity,
+  updateVisibility,
+  updateAspectRatio,
+  clearAll,
+  render as renderText,
+  getCityMarkers,
+  TextState,
+  City
+} from './textRendering';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const colorPicker = document.getElementById('color-picker') as HTMLInputElement;
 const brushSizeSlider = document.getElementById('brush-size') as HTMLInputElement;
+const fillBtn = document.getElementById('fill-btn') as HTMLButtonElement;
 const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
 const nameBtn = document.getElementById('name-btn') as HTMLButtonElement;
 const cityBtn = document.getElementById('city-btn') as HTMLButtonElement;
+const saveBtn = document.getElementById('save-btn') as HTMLButtonElement;
+const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
+const loadInput = document.getElementById('load-input') as HTMLInputElement;
+const playBtn = document.getElementById('play-btn') as HTMLButtonElement;
+const fpsCounter = document.getElementById('fps-counter') as HTMLDivElement;
 
 // Dialog elements
 const cityDialog = document.getElementById('city-dialog') as HTMLDivElement;
@@ -66,8 +85,8 @@ const paintUniforms = {
   uTexture: { value: paintB.texture },
   uBrushPos: { value: new THREE.Vector2(-1000, -1000) },
   uPrevBrushPos: { value: new THREE.Vector2(-1000, -1000) },
-  uBrushColor: { value: new THREE.Color(1, 0, 0) },
-  uBrushSize: { value: 20 },
+  uBrushColor: { value: new THREE.Color(colorPicker.value) },
+  uBrushSize: { value: parseInt(brushSizeSlider.value, 10) },
   uResolution: { value: new THREE.Vector2(width, height) },
 };
 
@@ -114,6 +133,7 @@ let isPainting = false;
 let isPanning = false;
 let isNamingMode = false;
 let isCityMode = false;
+let isFillMode = false;
 let prevPos = new THREE.Vector2(-1000, -1000);
 let currPos = new THREE.Vector2(-1000, -1000);
 let panStart = new THREE.Vector2();
@@ -125,7 +145,7 @@ let panY = 0;
 
 const jfaSteps = [32, 16, 8, 4, 2, 1];
 
-const textRenderer = new TextRenderer(width, height);
+let textState: TextState = createTextState(width, height);
 const countryLabels: Map<string, CountryLabel> = new Map();
 const cities: Map<string, City> = new Map();
 let cityIdCounter = 0;
@@ -157,6 +177,89 @@ function getAllPixels(): Uint8Array {
   renderer.readRenderTargetPixels(paintA, 0, 0, width, height, pixelBuffer);
   renderer.setRenderTarget(null);
   return pixelBuffer;
+}
+
+function floodFill(startX: number, startY: number, fillColor: THREE.Color): void {
+  const pixelData = getAllPixels();
+  const x = Math.floor(startX);
+  const y = Math.floor(startY);
+
+  if (x < 0 || x >= width || y < 0 || y >= height) return;
+
+  const startIdx = (y * width + x) * 4;
+  const targetR = pixelData[startIdx];
+  const targetG = pixelData[startIdx + 1];
+  const targetB = pixelData[startIdx + 2];
+
+  const fillR = Math.round(fillColor.r * 255);
+  const fillG = Math.round(fillColor.g * 255);
+  const fillB = Math.round(fillColor.b * 255);
+
+  // Don't fill if clicking on same color
+  if (targetR === fillR && targetG === fillG && targetB === fillB) return;
+
+  const visited = new Uint8Array(width * height);
+  const stack: number[] = [x, y];
+
+  while (stack.length > 0) {
+    const cy = stack.pop()!;
+    const cx = stack.pop()!;
+
+    if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+
+    const idx = cy * width + cx;
+    if (visited[idx]) continue;
+
+    const pixelIdx = idx * 4;
+    const pr = pixelData[pixelIdx];
+    const pg = pixelData[pixelIdx + 1];
+    const pb = pixelData[pixelIdx + 2];
+
+    // Check if this pixel matches target color
+    if (pr !== targetR || pg !== targetG || pb !== targetB) continue;
+
+    visited[idx] = 1;
+    pixelData[pixelIdx] = fillR;
+    pixelData[pixelIdx + 1] = fillG;
+    pixelData[pixelIdx + 2] = fillB;
+    pixelData[pixelIdx + 3] = 255;
+
+    // Add neighbors
+    stack.push(cx + 1, cy);
+    stack.push(cx - 1, cy);
+    stack.push(cx, cy + 1);
+    stack.push(cx, cy - 1);
+  }
+
+  // Upload modified pixels back to GPU
+  const clampedData = new Uint8ClampedArray(pixelData);
+  const dataTexture = new THREE.DataTexture(clampedData, width, height, THREE.RGBAFormat);
+  dataTexture.needsUpdate = true;
+
+  const copyMat = new THREE.ShaderMaterial({
+    vertexShader: quadVert,
+    fragmentShader: `
+      uniform sampler2D uTexture;
+      varying vec2 vUv;
+      void main() {
+        gl_FragColor = texture2D(uTexture, vUv);
+      }
+    `,
+    uniforms: { uTexture: { value: dataTexture } },
+  });
+
+  paintMesh.material = copyMat;
+  renderer.setRenderTarget(paintA);
+  renderer.render(paintScene, paintCamera);
+  renderer.setRenderTarget(paintB);
+  renderer.render(paintScene, paintCamera);
+  renderer.setRenderTarget(null);
+  paintMesh.material = paintMat;
+
+  dataTexture.dispose();
+  copyMat.dispose();
+
+  needsUpdate = true;
 }
 
 // Dialog helpers
@@ -224,7 +327,7 @@ function saveCountry(): void {
   if (label) {
     const labelId = colorToKey(pendingCountryColor);
     countryLabels.set(labelId, label);
-    textRenderer.addLabel(label, labelId);
+    addLabel(textState, label, labelId);
   }
 
   hideCountryDialog();
@@ -232,7 +335,7 @@ function saveCountry(): void {
 
 function deleteCountry(): void {
   if (editingCountryId) {
-    textRenderer.removeLabel(editingCountryId);
+    removeLabel(textState, editingCountryId);
     countryLabels.delete(editingCountryId);
   }
   hideCountryDialog();
@@ -263,7 +366,7 @@ function saveCity(): void {
       size
     };
     cities.set(editingCityId, city);
-    textRenderer.addCity(city, editingCityId);
+    addCity(textState, city, editingCityId);
   } else if (pendingCityPosition) {
     // Create new city
     const city: City = {
@@ -273,7 +376,7 @@ function saveCity(): void {
     };
     const cityId = `city_${cityIdCounter++}`;
     cities.set(cityId, city);
-    textRenderer.addCity(city, cityId);
+    addCity(textState, city, cityId);
   }
 
   hideCityDialog();
@@ -281,7 +384,7 @@ function saveCity(): void {
 
 function deleteCity(): void {
   if (editingCityId) {
-    textRenderer.removeCity(editingCityId);
+    removeCity(textState, editingCityId);
     cities.delete(editingCityId);
   }
   hideCityDialog();
@@ -306,7 +409,7 @@ function screenToWorld(e: MouseEvent): THREE.Vector2 {
 
 function checkCityClick(e: MouseEvent): string | null {
   const worldPos = screenToWorld(e);
-  const markers = textRenderer.getCityMarkers();
+  const markers = getCityMarkers(textState);
 
   // Check each marker
   for (const marker of markers) {
@@ -332,7 +435,7 @@ function updateDisplayCamera() {
   displayCamera.top = 1 / zoom - panY;
   displayCamera.bottom = -1 / zoom - panY;
   displayCamera.updateProjectionMatrix();
-  textRenderer.updateVisibility(zoom);
+  updateVisibility(textState, zoom);
 }
 
 function clear() {
@@ -345,7 +448,7 @@ function clear() {
   needsUpdate = true;
 
   // Clear country labels
-  textRenderer.clear();
+  clearAll(textState);
   countryLabels.clear();
 }
 
@@ -431,6 +534,11 @@ canvas.addEventListener('mousedown', (e) => {
       isCityMode = false;
       cityBtn.textContent = 'Add City';
       canvas.style.cursor = 'crosshair';
+    } else if (isFillMode) {
+      // Left click in fill mode - flood fill
+      const pos = screenToCanvas(e);
+      const fillColor = new THREE.Color(colorPicker.value);
+      floodFill(pos.x, pos.y, fillColor);
     } else {
       isPainting = true;
       currPos = screenToCanvas(e);
@@ -496,11 +604,10 @@ window.addEventListener('resize', () => {
   distanceFieldRT.setSize(width, height);
 
   paintUniforms.uResolution.value.set(width, height);
-  borderUniforms.resolution.value.set(width, height);
-  jfaUniforms.resolution.value.set(width, height);
-  displayUniforms.u_resolution.value.set(width, height);
+  borderUniforms.u_pixelSize.value.set(1 / width, 1 / height);
+  displayUniforms.u_pixelSize.value.set(1 / width, 1 / height);
 
-  textRenderer.updateAspectRatio(width, height);
+  updateAspectRatio(textState, width, height);
   updateDisplayCamera();
   clear();
 });
@@ -518,7 +625,9 @@ clearBtn.addEventListener('click', clear);
 nameBtn.addEventListener('click', () => {
   isNamingMode = !isNamingMode;
   isCityMode = false;
+  isFillMode = false;
   cityBtn.textContent = 'Add City';
+  fillBtn.classList.remove('active');
   if (isNamingMode) {
     nameBtn.textContent = 'Click on country...';
     canvas.style.cursor = 'pointer';
@@ -531,12 +640,29 @@ nameBtn.addEventListener('click', () => {
 cityBtn.addEventListener('click', () => {
   isCityMode = !isCityMode;
   isNamingMode = false;
+  isFillMode = false;
   nameBtn.textContent = 'Name (Middle-click)';
+  fillBtn.classList.remove('active');
   if (isCityMode) {
     cityBtn.textContent = 'Click to place...';
     canvas.style.cursor = 'pointer';
   } else {
     cityBtn.textContent = 'Add City';
+    canvas.style.cursor = 'crosshair';
+  }
+});
+
+fillBtn.addEventListener('click', () => {
+  isFillMode = !isFillMode;
+  isNamingMode = false;
+  isCityMode = false;
+  nameBtn.textContent = 'Name (Middle-click)';
+  cityBtn.textContent = 'Add City';
+  if (isFillMode) {
+    fillBtn.classList.add('active');
+    canvas.style.cursor = 'crosshair';
+  } else {
+    fillBtn.classList.remove('active');
     canvas.style.cursor = 'crosshair';
   }
 });
@@ -559,11 +685,293 @@ countryNameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') hideCountryDialog();
 });
 
+// Save/Load data structure
+interface MapSaveData {
+  version: number;
+  width: number;
+  height: number;
+  imageData: string; // Base64 encoded PNG
+  countries: Array<{
+    id: string;
+    name: string;
+    color: { r: number; g: number; b: number };
+  }>;
+  cities: Array<{
+    id: string;
+    name: string;
+    size: number;
+    position: { x: number; y: number };
+  }>;
+  cityIdCounter: number;
+}
+
+// Save map to file
+function saveMap(): void {
+  // Create a temporary canvas to get image data
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = width;
+  tempCanvas.height = height;
+  const ctx = tempCanvas.getContext('2d')!;
+
+  // Read pixel data from render target
+  const pixelData = getAllPixels();
+
+  // Create ImageData and put it on canvas
+  const imageData = ctx.createImageData(width, height);
+
+  // Copy and flip Y (WebGL has Y=0 at bottom, canvas has Y=0 at top)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const srcIdx = (y * width + x) * 4;
+      const dstIdx = ((height - 1 - y) * width + x) * 4;
+      imageData.data[dstIdx] = pixelData[srcIdx];
+      imageData.data[dstIdx + 1] = pixelData[srcIdx + 1];
+      imageData.data[dstIdx + 2] = pixelData[srcIdx + 2];
+      imageData.data[dstIdx + 3] = pixelData[srcIdx + 3];
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  // Convert to base64 PNG
+  const imageBase64 = tempCanvas.toDataURL('image/png');
+
+  // Build save data
+  const saveData: MapSaveData = {
+    version: 1,
+    width,
+    height,
+    imageData: imageBase64,
+    countries: Array.from(countryLabels.entries()).map(([id, label]) => ({
+      id,
+      name: label.name,
+      color: { r: label.color.r, g: label.color.g, b: label.color.b },
+    })),
+    cities: Array.from(cities.entries()).map(([id, city]) => ({
+      id,
+      name: city.name,
+      size: city.size,
+      position: { x: city.position.x, y: city.position.y },
+    })),
+    cityIdCounter,
+  };
+
+  // Create and download file
+  const blob = new Blob([JSON.stringify(saveData)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'map.map';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Load map from file
+function loadMap(file: File): void {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const saveData: MapSaveData = JSON.parse(e.target?.result as string);
+
+      if (saveData.version !== 1) {
+        alert('Unsupported save file version');
+        return;
+      }
+
+      // Clear current state
+      clear();
+      cities.clear();
+
+      // Load image data
+      const img = new Image();
+      img.onload = () => {
+        // Create a temporary canvas to get pixel data
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = img.width;
+        tempCanvas.height = img.height;
+        const ctx = tempCanvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, img.width, img.height);
+
+        // Create a data texture from the image
+        const dataTexture = new THREE.DataTexture(
+          imgData.data,
+          img.width,
+          img.height,
+          THREE.RGBAFormat
+        );
+        dataTexture.flipY = true;
+        dataTexture.needsUpdate = true;
+
+        // Create a simple copy shader to render the texture to paintA
+        const copyMat = new THREE.ShaderMaterial({
+          vertexShader: quadVert,
+          fragmentShader: `
+            uniform sampler2D uTexture;
+            varying vec2 vUv;
+            void main() {
+              gl_FragColor = texture2D(uTexture, vUv);
+            }
+          `,
+          uniforms: { uTexture: { value: dataTexture } },
+        });
+
+        paintMesh.material = copyMat;
+        renderer.setRenderTarget(paintA);
+        renderer.render(paintScene, paintCamera);
+        renderer.setRenderTarget(paintB);
+        renderer.render(paintScene, paintCamera);
+        renderer.setRenderTarget(null);
+        paintMesh.material = paintMat;
+
+        // Clean up
+        dataTexture.dispose();
+        copyMat.dispose();
+
+        needsUpdate = true;
+
+        // Restore countries
+        const pixelData = getAllPixels();
+        for (const country of saveData.countries) {
+          const color = new THREE.Color(country.color.r, country.color.g, country.color.b);
+          const label = createCountryLabel(pixelData, width, height, color, country.name);
+          if (label) {
+            countryLabels.set(country.id, label);
+            addLabel(textState, label, country.id);
+          }
+        }
+
+        // Restore cities
+        for (const cityData of saveData.cities) {
+          const city: City = {
+            position: new THREE.Vector2(cityData.position.x, cityData.position.y),
+            name: cityData.name,
+            size: cityData.size,
+          };
+          cities.set(cityData.id, city);
+          addCity(textState, city, cityData.id);
+        }
+
+        // Restore city counter
+        cityIdCounter = saveData.cityIdCounter;
+      };
+      img.src = saveData.imageData;
+    } catch (err) {
+      console.error('Failed to load map:', err);
+      alert('Failed to load map file');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Save/Load event listeners
+saveBtn.addEventListener('click', saveMap);
+loadBtn.addEventListener('click', () => loadInput.click());
+
+// Play button - validate and pass current map to game
+playBtn.addEventListener('click', () => {
+  // Get all unique colors from the canvas (excluding white background)
+  const pixelData = getAllPixels();
+  const colorSet = new Set<string>();
+
+  for (let i = 0; i < pixelData.length; i += 4) {
+    const r = pixelData[i];
+    const g = pixelData[i + 1];
+    const b = pixelData[i + 2];
+
+    // Skip white background
+    if (r > 240 && g > 240 && b > 240) continue;
+
+    const key = `${r}_${g}_${b}`;
+    colorSet.add(key);
+  }
+
+  // Check if there are any countries
+  if (colorSet.size === 0) {
+    alert('Please draw at least one country before playing.');
+    return;
+  }
+
+  // Check if all countries have names
+  const unnamedColors: string[] = [];
+  for (const colorKey of colorSet) {
+    if (!countryLabels.has(colorKey)) {
+      unnamedColors.push(colorKey);
+    }
+  }
+
+  if (unnamedColors.length > 0) {
+    alert(`Please name all countries before playing. ${unnamedColors.length} country/countries need names. Use middle-click or the "Name" button to name them.`);
+    return;
+  }
+
+  // Create save data for the game
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = width;
+  tempCanvas.height = height;
+  const ctx = tempCanvas.getContext('2d')!;
+  const imageData = ctx.createImageData(width, height);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const srcIdx = (y * width + x) * 4;
+      const dstIdx = ((height - 1 - y) * width + x) * 4;
+      imageData.data[dstIdx] = pixelData[srcIdx];
+      imageData.data[dstIdx + 1] = pixelData[srcIdx + 1];
+      imageData.data[dstIdx + 2] = pixelData[srcIdx + 2];
+      imageData.data[dstIdx + 3] = pixelData[srcIdx + 3];
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  const saveData: MapSaveData = {
+    version: 1,
+    width,
+    height,
+    imageData: tempCanvas.toDataURL('image/png'),
+    countries: Array.from(countryLabels.entries()).map(([id, label]) => ({
+      id,
+      name: label.name,
+      color: { r: label.color.r, g: label.color.g, b: label.color.b },
+    })),
+    cities: Array.from(cities.entries()).map(([id, city]) => ({
+      id,
+      name: city.name,
+      size: city.size,
+      position: { x: city.position.x, y: city.position.y },
+    })),
+    cityIdCounter,
+  };
+
+  // Store in sessionStorage and navigate
+  sessionStorage.setItem('currentMap', JSON.stringify(saveData));
+  window.location.href = '/game.html';
+});
+loadInput.addEventListener('change', (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) {
+    loadMap(file);
+    loadInput.value = ''; // Reset so same file can be loaded again
+  }
+});
+
 updateDisplayCamera();
 clear();
 
+// FPS tracking
+let lastTime = performance.now();
+let frameCount = 0;
+
 function animate() {
   requestAnimationFrame(animate);
+
+  // FPS calculation
+  frameCount++;
+  const now = performance.now();
+  if (now - lastTime >= 1000) {
+    fpsCounter.textContent = `FPS: ${frameCount}`;
+    frameCount = 0;
+    lastTime = now;
+  }
 
   if (needsUpdate) {
     runJFA();
@@ -571,6 +979,6 @@ function animate() {
   }
 
   renderer.render(displayScene, displayCamera);
-  textRenderer.render(renderer, displayCamera);
+  renderText(textState, renderer, displayCamera);
 }
 animate();
