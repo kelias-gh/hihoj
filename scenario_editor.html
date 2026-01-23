@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shader Paint</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-900 text-white overflow-hidden">
+    <div id="app" class="relative w-screen h-screen">
+      <canvas id="canvas" class="absolute inset-0 w-full h-full"></canvas>
+      <div id="fps-counter" class="absolute top-4 right-4 bg-gray-800 bg-opacity-90 px-3 py-1.5 rounded text-sm font-mono">FPS: --</div>
+      <div id="controls" class="absolute top-4 left-4 flex items-center gap-2 bg-gray-800 bg-opacity-90 px-4 py-2 rounded-lg shadow-lg flex-wrap">
+        <button id="library-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded transition-colors">Library</button>
+        <button id="play-btn" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-3 py-1.5 rounded transition-colors">Play</button>
+        <div class="w-px h-6 bg-gray-600"></div>
+        <label class="flex items-center gap-2">
+          <span class="text-sm">Color:</span>
+          <input type="color" id="color-picker" value="#ff0000" class="w-10 h-8 rounded cursor-pointer border border-gray-600" />
+        </label>
+        <label class="flex items-center gap-2">
+          <span class="text-sm">Brush Size:</span>
+          <input type="range" id="brush-size" min="1" max="100" value="20" class="w-24" />
+        </label>
+        <button id="fill-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded transition-colors">Fill</button>
+        <button id="clear-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded transition-colors">Clear</button>
+        <button id="name-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded transition-colors">Name (Middle-click)</button>
+        <button id="city-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded transition-colors">Add City</button>
+        <div class="w-px h-6 bg-gray-600"></div>
+        <button id="save-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 rounded transition-colors">Save</button>
+        <button id="load-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded transition-colors">Load</button>
+        <input type="file" id="load-input" accept=".map" class="hidden" />
+        <div class="w-px h-6 bg-gray-600"></div>
+        <button id="ref-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-3 py-1.5 rounded transition-colors">Reference</button>
+        <input type="file" id="ref-input" accept="image/*" class="hidden" />
+        <input type="range" id="ref-opacity" min="0" max="100" value="30" title="Reference opacity" class="w-20" />
+      </div>
+    </div>
+
+    <!-- City Dialog -->
+    <div id="city-dialog" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+        <h3 id="city-dialog-title" class="text-xl font-bold mb-4">Add City</h3>
+        <div class="mb-4">
+          <label for="city-name" class="block text-sm font-medium text-gray-300 mb-1">City Name</label>
+          <input type="text" id="city-name" placeholder="Enter city name..." class="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" />
+        </div>
+        <div class="mb-6">
+          <label for="city-size" class="block text-sm font-medium text-gray-300 mb-1">City Size</label>
+          <select id="city-size" class="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none">
+            <option value="1">1 - Village</option>
+            <option value="2">2 - Town</option>
+            <option value="3" selected>3 - City</option>
+            <option value="4">4 - Large City</option>
+            <option value="5">5 - Capital</option>
+          </select>
+        </div>
+        <div class="flex justify-between gap-3">
+          <button id="city-delete" class="bg-red-600 hover:bg-red-700 text-white font-semibold px-4 py-2 rounded transition-colors hidden">Delete</button>
+          <div class="flex gap-3 ml-auto">
+            <button id="city-cancel" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-4 py-2 rounded transition-colors">Cancel</button>
+            <button id="city-save" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded transition-colors">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Country Dialog -->
+    <div id="country-dialog" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+        <h3 id="country-dialog-title" class="text-xl font-bold mb-4">Name Country</h3>
+        <div class="mb-6">
+          <label for="country-name" class="block text-sm font-medium text-gray-300 mb-1">Country Name</label>
+          <input type="text" id="country-name" placeholder="Enter country name..." class="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none" />
+        </div>
+        <div class="flex justify-between gap-3">
+          <button id="country-delete" class="bg-red-600 hover:bg-red-700 text-white font-semibold px-4 py-2 rounded transition-colors hidden">Delete</button>
+          <div class="flex gap-3 ml-auto">
+            <button id="country-cancel" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-4 py-2 rounded transition-colors">Cancel</button>
+            <button id="country-save" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded transition-colors">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

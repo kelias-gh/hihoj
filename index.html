@@ -3,76 +3,40 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Shader Paint</title>
-    <link rel="stylesheet" href="/src/styles/main.css" />
+    <title>Scenario Library</title>
+    <script src="https://cdn.tailwindcss.com"></script>
   </head>
-  <body>
-    <div id="app">
-      <canvas id="canvas"></canvas>
-      <div id="fps-counter">FPS: --</div>
-      <div id="controls">
-        <button id="play-btn" class="btn-play">Play</button>
-        <div class="separator"></div>
-        <label>
-          Color:
-          <input type="color" id="color-picker" value="#ff0000" />
-        </label>
-        <label>
-          Brush Size:
-          <input type="range" id="brush-size" min="1" max="100" value="20" />
-        </label>
-        <button id="fill-btn">Fill</button>
-        <button id="clear-btn">Clear</button>
-        <button id="name-btn">Name (Middle-click)</button>
-        <button id="city-btn">Add City</button>
-        <div class="separator"></div>
-        <button id="save-btn">Save</button>
-        <button id="load-btn">Load</button>
-        <input type="file" id="load-input" accept=".map" style="display: none;" />
+  <body class="bg-gray-900 text-white min-h-screen">
+    <div id="library-app" class="container mx-auto px-4 py-6">
+      <header id="library-header" class="flex justify-between items-center mb-8 pb-4 border-b border-gray-700">
+        <h1 class="text-3xl font-bold">Scenario Library</h1>
+        <div id="library-actions" class="flex gap-3">
+          <button id="new-scenario-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded transition-colors">New Scenario</button>
+          <button id="import-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-4 py-2 rounded transition-colors">Import</button>
+          <input type="file" id="import-input" accept=".map" class="hidden" />
+        </div>
+      </header>
+
+      <div id="scenario-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"></div>
+
+      <div id="empty-state" class="hidden text-center mt-20">
+        <p class="text-xl text-gray-400 mb-2">No scenarios yet</p>
+        <p class="text-sm text-gray-500">Create a new scenario or import an existing .map file</p>
       </div>
     </div>
 
-    <!-- City Dialog -->
-    <div id="city-dialog" class="dialog-overlay hidden">
-      <div class="dialog">
-        <h3 id="city-dialog-title">Add City</h3>
-        <div class="dialog-field">
-          <label for="city-name">City Name</label>
-          <input type="text" id="city-name" placeholder="Enter city name..." />
-        </div>
-        <div class="dialog-field">
-          <label for="city-size">City Size</label>
-          <select id="city-size">
-            <option value="1">1 - Village</option>
-            <option value="2">2 - Town</option>
-            <option value="3" selected>3 - City</option>
-            <option value="4">4 - Large City</option>
-            <option value="5">5 - Capital</option>
-          </select>
-        </div>
-        <div class="dialog-buttons">
-          <button id="city-delete" class="btn-danger" style="display: none;">Delete</button>
-          <button id="city-cancel" class="btn-secondary">Cancel</button>
-          <button id="city-save" class="btn-primary">Save</button>
+    <!-- Delete Confirmation Dialog -->
+    <div id="delete-dialog" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+        <h3 class="text-xl font-bold mb-4">Delete Scenario</h3>
+        <p id="delete-message" class="text-gray-300 mb-6">Are you sure you want to delete this scenario?</p>
+        <div class="flex justify-end gap-3">
+          <button id="delete-cancel" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold px-4 py-2 rounded transition-colors">Cancel</button>
+          <button id="delete-confirm" class="bg-red-600 hover:bg-red-700 text-white font-semibold px-4 py-2 rounded transition-colors">Delete</button>
         </div>
       </div>
     </div>
 
-    <!-- Country Dialog -->
-    <div id="country-dialog" class="dialog-overlay hidden">
-      <div class="dialog">
-        <h3 id="country-dialog-title">Name Country</h3>
-        <div class="dialog-field">
-          <label for="country-name">Country Name</label>
-          <input type="text" id="country-name" placeholder="Enter country name..." />
-        </div>
-        <div class="dialog-buttons">
-          <button id="country-delete" class="btn-danger" style="display: none;">Delete</button>
-          <button id="country-cancel" class="btn-secondary">Cancel</button>
-          <button id="country-save" class="btn-primary">Save</button>
-        </div>
-      </div>
-    </div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/library.ts"></script>
   </body>
 </html>

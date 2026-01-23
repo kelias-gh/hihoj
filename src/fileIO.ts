@@ -1,71 +1,39 @@
 import * as THREE from 'three';
+import { MapSaveData, City } from './types';
 
-export interface CityData {
-  position: THREE.Vector2;
-  name: string;
-  size: number;
-}
-
-export interface CountryData {
-  id: string;
-  name: string;
-  color: THREE.Color;
-}
-
-export interface MapSaveData {
-  version: number;
-  width: number;
-  height: number;
-  imageData: string;
-  countries: Array<{
-    id: string;
-    name: string;
-    color: { r: number; g: number; b: number };
-  }>;
-  cities: Array<{
-    id: string;
-    name: string;
-    size: number;
-    position: { x: number; y: number };
-  }>;
-  cityIdCounter: number;
-}
+export type { MapSaveData } from './types';
 
 export function saveMapToFile(
   pixelData: Uint8Array,
   width: number,
   height: number,
   countries: Map<string, { name: string; color: THREE.Color }>,
-  cities: Map<string, CityData>,
+  cities: Map<string, City>,
   cityIdCounter: number
-): void {
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = width;
-  tempCanvas.height = height;
-  const ctx = tempCanvas.getContext('2d')!;
+) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d')!;
+  const imgData = ctx.createImageData(width, height);
 
-  const imageData = ctx.createImageData(width, height);
-
-  // Copy and flip Y (WebGL has Y=0 at bottom, canvas has Y=0 at top)
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const srcIdx = (y * width + x) * 4;
-      const dstIdx = ((height - 1 - y) * width + x) * 4;
-      imageData.data[dstIdx] = pixelData[srcIdx];
-      imageData.data[dstIdx + 1] = pixelData[srcIdx + 1];
-      imageData.data[dstIdx + 2] = pixelData[srcIdx + 2];
-      imageData.data[dstIdx + 3] = pixelData[srcIdx + 3];
+      const src = (y * width + x) * 4;
+      const dst = ((height - 1 - y) * width + x) * 4;
+      imgData.data[dst] = pixelData[src];
+      imgData.data[dst + 1] = pixelData[src + 1];
+      imgData.data[dst + 2] = pixelData[src + 2];
+      imgData.data[dst + 3] = pixelData[src + 3];
     }
   }
-  ctx.putImageData(imageData, 0, 0);
-
-  const imageBase64 = tempCanvas.toDataURL('image/png');
+  ctx.putImageData(imgData, 0, 0);
 
   const saveData: MapSaveData = {
     version: 1,
     width,
     height,
-    imageData: imageBase64,
+    imageData: canvas.toDataURL('image/png'),
     countries: Array.from(countries.entries()).map(([id, data]) => ({
       id,
       name: data.name,
@@ -89,18 +57,10 @@ export function saveMapToFile(
   URL.revokeObjectURL(url);
 }
 
-export function parseMapFile(jsonString: string): MapSaveData | null {
-  try {
-    const data: MapSaveData = JSON.parse(jsonString);
-    if (data.version !== 1) {
-      console.error('Unsupported save file version');
-      return null;
-    }
-    return data;
-  } catch (err) {
-    console.error('Failed to parse map file:', err);
-    return null;
-  }
+export function parseMapFile(json: string): MapSaveData | null {
+  const data: MapSaveData = JSON.parse(json);
+  if (data.version !== 1 && data.version !== 2) return null;
+  return data;
 }
 
 export function loadImageFromBase64(base64: string): Promise<HTMLImageElement> {
